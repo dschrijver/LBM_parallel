@@ -19,8 +19,8 @@
 #define NLOG    100
 
 // Array indexing
-#define INDEX_2D(i,j)       ((NY_proc+2)*(i+1) + (j+1))
-#define INDEX_3D(i,j,p)     ((NY_proc+2)*NP*(i+1) + NP*(j+1) + (p))
+#define INDEX_2D(i,j)       ((NY_proc+2)*(i+1-i_start) + (j+1-j_start))
+#define INDEX_3D(i,j,p)     ((NY_proc+2)*NP*(i+1-i_start) + NP*(j+1-j_start) + (p))
 
 // Parameters
 double tau = 1.0;
@@ -33,7 +33,7 @@ int cy[] = {0, 0, 1, 0, -1, 1, 1, -1, -1};
 int p_bounceback[] = {0, 3, 4, 1, 2, 7, 8, 5, 6};
 double w[] = {4.0/9.0, 1.0/9.0, 1.0/9.0, 1.0/9.0, 1.0/9.0, 1.0/36.0, 1.0/36.0, 1.0/36.0, 1.0/36.0};
 
-hid_t open_output(int t, int n_output, int process_rank) {
+hid_t open_output(int t, int n_output) {
     char filename[32];
     sprintf(filename, "data_%d.h5", n_output);
     hid_t fapl_id = H5Pcreate(H5P_FILE_ACCESS);
@@ -55,24 +55,28 @@ hid_t open_output(int t, int n_output, int process_rank) {
 }
 
 void output_data(double* field, char *fieldname, hid_t file_id, int i_start, int i_end, int j_start, int j_end) {
+
+    int NX_proc = i_end-i_start;
+    int NY_proc = j_end-j_start;
+
     hsize_t dims_file[2] = {NX, NY};
     hid_t filespace = H5Screate_simple(2, dims_file, NULL);
+
+    hsize_t dims_proc[2] = {NX_proc+2, NY_proc+2};
+    hid_t memspace  = H5Screate_simple(2, dims_proc, NULL);
 
     hid_t dcpl_id = H5Pcreate(H5P_DATASET_CREATE);
     hid_t dset_id = H5Dcreate2(file_id, fieldname, H5T_NATIVE_DOUBLE, filespace, H5P_DEFAULT, dcpl_id, H5P_DEFAULT);
     H5Pclose(dcpl_id);
     H5Sclose(filespace);
 
-    int NX_proc = i_end-i_start;
-    int NY_proc = j_end-j_start;
+    hsize_t start_proc[2] = {1, 1};
+    hsize_t count[2] = {NX_proc, NY_proc};    
+    H5Sselect_hyperslab(memspace, H5S_SELECT_SET, start_proc, NULL, count, NULL);
 
-    hsize_t start[2] = {i_start, j_start};
-    hsize_t count[2] = {NX_proc, NY_proc};
-
-    hid_t memspace  = H5Screate_simple(2, count, NULL);
-
+    hsize_t start_file[2] = {i_start, j_start};
     filespace = H5Dget_space(dset_id);
-    H5Sselect_hyperslab(filespace, H5S_SELECT_SET, start, NULL, count, NULL);
+    H5Sselect_hyperslab(filespace, H5S_SELECT_SET, start_file, NULL, count, NULL);
 
     hid_t dxpl_id = H5Pcreate(H5P_DATASET_XFER);
     H5Pset_dxpl_mpio(dxpl_id, H5FD_MPIO_COLLECTIVE);
@@ -154,9 +158,9 @@ int main(int argc, char** argv) {
     f2 = (double *) malloc(memsize_dist);
 
     // Initialize fields
-    for (int i = 0; i < NX_proc; i++) {
-        for (int j = 0; j < NY_proc; j++) {
-            rho[INDEX_2D(i,j)] = 1.0;
+    for (int i = i_start; i < i_end; i++) {
+        for (int j = j_start; j < j_end; j++) {
+            rho[INDEX_2D(i,j)] = process_rank;
             u[INDEX_2D(i,j)] = 0.0;
             v[INDEX_2D(i,j)] = 0.0;
         }
@@ -166,8 +170,8 @@ int main(int argc, char** argv) {
     double uhat, u2, uc;
     uhat = -0.5*F_p;
     u2 = uhat*uhat;
-    for (int i = 0; i < NX_proc; i++) {
-        for (int j = 0; j < NY_proc; j++) {
+    for (int i = i_start; i < i_end; i++) {
+        for (int j = j_start; j < j_end; j++) {
             for (int p = 0; p < NP; p++) {
                 uc = uhat*cx[p];
                 f1[INDEX_3D(i,j,p)] = w[p]*(1.0 + uc/cs2 + (uc*uc)/(2.0*cs2*cs2) - u2/(2.0*cs2));
@@ -182,7 +186,7 @@ int main(int argc, char** argv) {
     
     int t_log = 0;
 
-    file_id = open_output(t, n_output, process_rank);
+    file_id = open_output(t, n_output);
     output_data(rho, "rho", file_id, i_start, i_end, j_start, j_end);
     output_data(u, "u", file_id, i_start, i_end, j_start, j_end);
     output_data(v, "v", file_id, i_start, i_end, j_start, j_end);
@@ -193,7 +197,7 @@ int main(int argc, char** argv) {
 
     while (t < NTIME) {
         if (t == t_output) {
-            file_id = open_output(t, n_output, process_rank);
+            file_id = open_output(t, n_output);
             output_data(rho, "rho", file_id, i_start, i_end, j_start, j_end);
             output_data(u, "u", file_id, i_start, i_end, j_start, j_end);
             output_data(v, "v", file_id, i_start, i_end, j_start, j_end);
@@ -202,8 +206,8 @@ int main(int argc, char** argv) {
             t_output += NSTORE;
         }
 
-        for (int i = 0; i < NX_proc; i++) {
-            for (int j = 0; j < NY_proc; j++) {
+        for (int i = i_start; i < i_end; i++) {
+            for (int j = j_start; j < j_end; j++) {
                 rho_i = rho[INDEX_2D(i,j)];
                 u_i = u[INDEX_2D(i,j)];
                 v_i = v[INDEX_2D(i,j)];
@@ -217,9 +221,9 @@ int main(int argc, char** argv) {
             }
         }
 
-        for (int j = 0; j < NY_proc; j++) {
-            send_buffer_x[j] = 
-        }
+        // for (int j = 0; j < NY_proc; j++) {
+        //     send_buffer_x[j] = 
+        // }
 
         if (t == t_log) {
             t_log += NLOG;
@@ -228,7 +232,7 @@ int main(int argc, char** argv) {
         t++;
     }
 
-    file_id = open_output(t, n_output, process_rank);
+    file_id = open_output(t, n_output);
     output_data(rho, "rho", file_id, i_start, i_end, j_start, j_end);
     output_data(u, "u", file_id, i_start, i_end, j_start, j_end);
     output_data(v, "v", file_id, i_start, i_end, j_start, j_end);
