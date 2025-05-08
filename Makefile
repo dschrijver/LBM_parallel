@@ -6,7 +6,7 @@ LIBS_FLAGS = -lm
 SRC = $(wildcard main.c src/*.c)
 
 run: clean main.out
-	mpirun -np 5 ./main.out
+	mpirun -np 6 ./main.out
 
 main.out: 
 	$(COMPILER) $(SRC) -o $@ $(OPT_FLAGS) $(DEBUG_FLAGS) $(HDF5_FLAGS) $(LIBS_FLAGS)
